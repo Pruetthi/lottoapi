@@ -99,7 +99,7 @@ app.post("/register", upload.single("image"), (req, res) => {
     const image = req.file ? req.file.filename : null;
 
     const sql =
-        "INSERT INTO users (name, email, password, wallet, dob, image, status) VALUES (?, ?, ?, ?, ?, ?, 'user')";
+        "INSERT INTO users (user_name, email, password, wallet, birthday, image, status) VALUES (?, ?, ?, ?, ?, ?, 'user')";
     db.query(sql, [name, email, password, wallet || 0, dob, image], (err, result) => {
         if (err) {
             console.error(err);
