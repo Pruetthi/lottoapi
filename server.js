@@ -10,10 +10,19 @@ const port = process.env.PORT || 3000;
 const multer = require("multer");
 const path = require("path");
 
-const uploadDir = path.join(__dirname, "uploads");
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir);
-}
+const admin = require("firebase-admin");
+
+// ✅ init Firebase Admin
+const serviceAccount = require("./serviceAccountKey.json");
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+    storageBucket: "imagelotto-5902f.appspot.com", // เปลี่ยนเป็น bucket ของคุณ
+});
+
+const bucket = admin.storage().bucket();
+
+const upload = multer({ dest: "temp/" });
+
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
@@ -86,23 +95,52 @@ const storage = multer.diskStorage({
         cb(null, uniqueName);
     },
 });
-const upload = multer({ storage });
 
 
-app.post("/register", upload.single("image"), (req, res) => {
+
+app.post("/register", upload.single("image"), async (req, res) => {
     const { email, password, user_name, wallet, birthday } = req.body;
-    const image = req.file ? `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}` : null;
 
-    const hashedPassword = crypto.createHash("sha256").update(password).digest("hex");
+    let imageUrl = null;
+    if (req.file) {
+        const fileName = Date.now() + path.extname(req.file.originalname);
+        const firebaseFile = bucket.file("profile/" + fileName);
+
+        await bucket.upload(req.file.path, {
+            destination: "profile/" + fileName,
+            metadata: {
+                contentType: req.file.mimetype,
+            },
+        });
+
+        // ✅ ตั้งให้ public
+        await firebaseFile.makePublic();
+
+        // ✅ URL ที่เอาไปเก็บใน DB
+        imageUrl = `https://storage.googleapis.com/${bucket.name}/profile/${fileName}`;
+
+        // ลบไฟล์ชั่วคราว
+        fs.unlinkSync(req.file.path);
+    }
+
+    const hashedPassword = crypto
+        .createHash("sha256")
+        .update(password)
+        .digest("hex");
+
     const sql =
-        "INSERT INTO users (user_name, email,password, wallet, birthday, image, status) VALUES (?, ?, ?, ?, ?, ?, 'user')";
-    db.query(sql, [user_name, email, hashedPassword, wallet || 0, birthday, image], (err, result) => {
-        if (err) {
-            console.error(err);
-            return res.status(500).json({ message: "❌ สมัครไม่สำเร็จ" });
+        "INSERT INTO users (user_name, email, password, wallet, birthday, image, status) VALUES (?, ?, ?, ?, ?, ?, 'user')";
+    db.query(
+        sql,
+        [user_name, email, hashedPassword, wallet || 0, birthday, imageUrl],
+        (err, result) => {
+            if (err) {
+                console.error(err);
+                return res.status(500).json({ message: "❌ สมัครไม่สำเร็จ" });
+            }
+            res.status(201).json({ message: "✅ สมัครสมาชิกสำเร็จ" });
         }
-        res.status(201).json({ message: "✅ สมัครสมาชิกสำเร็จ" });
-    });
+    );
 });
 
 
@@ -127,13 +165,13 @@ app.post("/login", (req, res) => {
         res.status(200).json({
             message: "Login successful",
             user: {
-        uid: user.uid,
-        user_name: user.user_name,
-        email: user.email,
-        status: user.status,
-        wallet: user.wallet,
-        image: user.image, 
-    },
+                uid: user.uid,
+                user_name: user.user_name,
+                email: user.email,
+                status: user.status,
+                wallet: user.wallet,
+                image: user.image,
+            },
         });
     });
 });
