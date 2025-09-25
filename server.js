@@ -127,12 +127,13 @@ app.post("/login", (req, res) => {
         res.status(200).json({
             message: "Login successful",
             user: {
-                uid: user.uid,
-                user_name: user.user_name,
-                email: user.email,
-                status: user.status,
-                wallet: user.wallet,
-            },
+        uid: user.uid,
+        user_name: user.user_name,
+        email: user.email,
+        status: user.status,
+        wallet: user.wallet,
+        image: user.image, 
+    },
         });
     });
 });
