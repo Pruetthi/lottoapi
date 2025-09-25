@@ -15,7 +15,7 @@ if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir);
 }
 
-app.use("/uploads", express.static(uploadDir));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 
 app.use(cors());
@@ -91,11 +91,12 @@ const upload = multer({ storage });
 
 app.post("/register", upload.single("image"), (req, res) => {
     const { email, password, user_name, wallet, birthday } = req.body;
-    const image = req.file ? req.file.filename : null;
-  const hashedPassword = crypto.createHash("sha256").update(password).digest("hex");
+    const image = req.file ? `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}` : null;
+
+    const hashedPassword = crypto.createHash("sha256").update(password).digest("hex");
     const sql =
         "INSERT INTO users (user_name, email,password, wallet, birthday, image, status) VALUES (?, ?, ?, ?, ?, ?, 'user')";
-    db.query(sql, [user_name, email, hashedPassword, wallet || 0, birthday, image], (err, result) => {
+    db.querydb.query(sql, [user_name, email, hashedPassword, wallet || 0, birthday, image], (err, result) => {
         if (err) {
             console.error(err);
             return res.status(500).json({ message: "❌ สมัครไม่สำเร็จ" });
