@@ -70,17 +70,28 @@ app.put("/users/:id", (req, res) => {
 });
 
 
+const multer = require("multer");
+const path = require("path");
 
-app.post("/register", (req, res) => {
-    const { email, password, user_name, wallet, birthday, image } = req.body;
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, "uploads/"),
+    filename: (req, file, cb) => {
+        const uniqueName = Date.now() + path.extname(file.originalname);
+        cb(null, uniqueName);
+    }
+});
+const upload = multer({ storage });
 
 
+app.post("/register", upload.single("image"), (req, res) => {
+    const { email, password, user_name, wallet, birthday } = req.body;
     const hashedPassword = crypto.createHash("sha256").update(password).digest("hex");
+    const imagePath = req.file ? "/uploads/" + req.file.filename : null;
 
     const sql = "INSERT INTO users (email, user_name, password, wallet, birthday, image) VALUES (?, ?, ?, ?, ?, ?)";
-    db.query(sql, [email, user_name, hashedPassword, wallet, birthday, image], (err, results) => {
+    db.query(sql, [email, user_name, hashedPassword, wallet, birthday, imagePath], (err, results) => {
         if (err) return res.status(500).json({ message: "Database error", error: err });
-        res.status(200).json({ message: "Registration successful" });
+        res.status(200).json({ message: "Registration successful", image: imagePath });
     });
 });
 
