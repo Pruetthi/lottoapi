@@ -38,11 +38,6 @@ db.connect((err) => {
     console.log("✅ Connected to MySQL Database!");
 });
 
-
-
-
-
-
 app.get("/users", (req, res) => {
     const sql = "SELECT * FROM users";
     db.query(sql, (err, results) => {
@@ -97,7 +92,7 @@ const upload = multer({ storage });
 app.post("/register", upload.single("image"), (req, res) => {
     const { email, password, user_name, wallet, birthday } = req.body;
     const image = req.file ? req.file.filename : null;
-
+  const hashedPassword = crypto.createHash("sha256").update(password).digest("hex");
     const sql =
         "INSERT INTO users (user_name, email, password, wallet, birthday, image, status) VALUES (?, ?, ?, ?, ?, ?, 'user')";
     db.query(sql, [user_name, email, password, wallet || 0, birthday, image], (err, result) => {
