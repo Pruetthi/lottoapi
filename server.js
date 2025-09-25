@@ -6,6 +6,15 @@ const crypto = require("crypto");
 require('dotenv').config();
 const app = express();
 const port = process.env.PORT || 3000;
+const multer = require("multer");
+const path = require("path");
+
+const uploadDir = path.join(__dirname, "uploads");
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir);
+}
+
+app.use("/uploads", express.static(uploadDir));
 
 
 app.use(cors());
@@ -27,6 +36,8 @@ db.connect((err) => {
     }
     console.log("✅ Connected to MySQL Database!");
 });
+
+
 
 
 
@@ -70,28 +81,30 @@ app.put("/users/:id", (req, res) => {
 });
 
 
-const multer = require("multer");
-const path = require("path");
+
 
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, "uploads/"),
+    destination: (req, file, cb) => cb(null, uploadDir),
     filename: (req, file, cb) => {
         const uniqueName = Date.now() + path.extname(file.originalname);
         cb(null, uniqueName);
-    }
+    },
 });
 const upload = multer({ storage });
 
 
 app.post("/register", upload.single("image"), (req, res) => {
-    const { email, password, user_name, wallet, birthday } = req.body;
-    const hashedPassword = crypto.createHash("sha256").update(password).digest("hex");
-    const imagePath = req.file ? "/uploads/" + req.file.filename : null;
+    const { name, email, password, wallet, dob } = req.body;
+    const image = req.file ? req.file.filename : null;
 
-    const sql = "INSERT INTO users (email, user_name, password, wallet, birthday, image) VALUES (?, ?, ?, ?, ?, ?)";
-    db.query(sql, [email, user_name, hashedPassword, wallet, birthday, imagePath], (err, results) => {
-        if (err) return res.status(500).json({ message: "Database error", error: err });
-        res.status(200).json({ message: "Registration successful", image: imagePath });
+    const sql =
+        "INSERT INTO users (name, email, password, wallet, dob, image, status) VALUES (?, ?, ?, ?, ?, ?, 'user')";
+    db.query(sql, [name, email, password, wallet || 0, dob, image], (err, result) => {
+        if (err) {
+            console.error(err);
+            return res.status(500).json({ message: "❌ สมัครไม่สำเร็จ" });
+        }
+        res.status(201).json({ message: "✅ สมัครสมาชิกสำเร็จ" });
     });
 });
 
