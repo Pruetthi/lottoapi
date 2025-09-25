@@ -95,12 +95,12 @@ const upload = multer({ storage });
 
 
 app.post("/register", upload.single("image"), (req, res) => {
-    const { name, email, password, wallet, dob } = req.body;
+    const { email, password, user_name, wallet, birthday } = req.body;
     const image = req.file ? req.file.filename : null;
 
     const sql =
         "INSERT INTO users (user_name, email, password, wallet, birthday, image, status) VALUES (?, ?, ?, ?, ?, ?, 'user')";
-    db.query(sql, [name, email, password, wallet || 0, dob, image], (err, result) => {
+    db.query(sql, [user_name, email, password, wallet || 0, birthday, image], (err, result) => {
         if (err) {
             console.error(err);
             return res.status(500).json({ message: "❌ สมัครไม่สำเร็จ" });
@@ -108,6 +108,7 @@ app.post("/register", upload.single("image"), (req, res) => {
         res.status(201).json({ message: "✅ สมัครสมาชิกสำเร็จ" });
     });
 });
+
 
 app.post("/login", (req, res) => {
     const { email, password } = req.body;
