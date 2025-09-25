@@ -94,8 +94,8 @@ app.post("/register", upload.single("image"), (req, res) => {
     const image = req.file ? req.file.filename : null;
   const hashedPassword = crypto.createHash("sha256").update(password).digest("hex");
     const sql =
-        "INSERT INTO users (user_name, email,hashedPassword, wallet, birthday, image, status) VALUES (?, ?, ?, ?, ?, ?, 'user')";
-    db.query(sql, [user_name, email, password, wallet || 0, birthday, image], (err, result) => {
+        "INSERT INTO users (user_name, email,password, wallet, birthday, image, status) VALUES (?, ?, ?, ?, ?, ?, 'user')";
+    db.query(sql, [user_name, email, hashedPassword, wallet || 0, birthday, image], (err, result) => {
         if (err) {
             console.error(err);
             return res.status(500).json({ message: "❌ สมัครไม่สำเร็จ" });
