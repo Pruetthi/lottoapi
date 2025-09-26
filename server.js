@@ -501,7 +501,7 @@ app.post("/claim/:lid", async (req, res) => {
         }
 
         try {
-            // 1. อัปเดต wallet ใน MySQL
+            // MySQL update wallet
             await new Promise((resolve, reject) => {
                 const sqlWallet = `UPDATE users SET wallet = wallet + ? WHERE uid = ?`;
                 db.query(sqlWallet, [lotto.reward_money, lotto.uid], (err2) => {
@@ -510,7 +510,7 @@ app.post("/claim/:lid", async (req, res) => {
                 });
             });
 
-            // 2. อัปเดต status ของ lotto ใน MySQL
+            // MySQL update lotto status
             await new Promise((resolve, reject) => {
                 const sqlStatus = "UPDATE lotto SET status = 'claim' WHERE lid = ?";
                 db.query(sqlStatus, [lid], (err3) => {
@@ -519,7 +519,7 @@ app.post("/claim/:lid", async (req, res) => {
                 });
             });
 
-            // 3. อัปเดต Firestore
+            // Firestore update
             try {
                 await firestore.collection("users").doc(lotto.uid.toString()).update({
                     wallet: admin.firestore.FieldValue.increment(lotto.reward_money),
@@ -531,7 +531,6 @@ app.post("/claim/:lid", async (req, res) => {
                 });
             } catch (fbErr) {
                 console.error("⚠️ Firestore sync error:", fbErr);
-                // ไม่ rollback MySQL เพื่อไม่ให้ผู้ใช้เสียสิทธิ์
             }
 
             res.status(200).json({
@@ -545,6 +544,7 @@ app.post("/claim/:lid", async (req, res) => {
         }
     });
 });
+
 
 
 
