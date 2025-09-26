@@ -1,3 +1,15 @@
+const admin = require("firebase-admin");
+const serviceAccount = require("./.json");
+
+admin.initializeApp({
+    credential: admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+    }),
+});
+
+const firestore = admin.firestore();
 const fs = require("fs");
 const express = require("express");
 const mysql = require("mysql2");
@@ -29,6 +41,8 @@ const db = mysql.createConnection({
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME
 });
+
+
 
 db.connect((err) => {
     if (err) {
@@ -89,58 +103,130 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 
-app.post("/register", upload.single("image"), (req, res) => {
+app.post("/register", upload.single("image"), async (req, res) => {
     const { email, password, user_name, wallet, birthday } = req.body;
-    const image = req.file ? `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}` : null;
 
-    const hashedPassword = crypto.createHash("sha256").update(password).digest("hex");
-    const sql =
-        "INSERT INTO users (user_name, email,password, wallet, birthday, image, status) VALUES (?, ?, ?, ?, ?, ?, 'user')";
-    db.query(sql, [user_name, email, hashedPassword, wallet || 0, birthday, image], (err, result) => {
+    // ตรวจสอบ input เบื้องต้น
+    if (!email || !password || !user_name) {
+        return res.status(400).json({ message: "กรุณากรอกข้อมูลให้ครบ" });
+    }
+
+    const image = req.file
+        ? `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`
+        : null;
+
+    // แปลง password เป็น hash
+    const hashedPassword = crypto
+        .createHash("sha256")
+        .update(password)
+        .digest("hex");
+
+    // SQL insert เข้า MySQL
+    const sql = `
+        INSERT INTO users (user_name, email, password, wallet, birthday, image, status)
+        VALUES (?, ?, ?, ?, ?, ?, 'user')
+    `;
+
+    db.query(sql, [user_name, email, hashedPassword, wallet || 0, birthday, image], async (err, result) => {
         if (err) {
-            console.error(err);
-            return res.status(500).json({ message: "❌ สมัครไม่สำเร็จ" });
+            console.error("❌ MySQL insert error:", err);
+            return res.status(500).json({ message: "สมัครสมาชิก MySQL ไม่สำเร็จ" });
         }
-        res.status(201).json({ message: "✅ สมัครสมาชิกสำเร็จ" });
+
+        const uid = result.insertId;
+        console.log("✅ MySQL saved user ID:", uid);
+
+        // บันทึก Firestore
+        try {
+            await firestore.collection("users").doc(uid.toString()).set({
+                uid,
+                user_name,
+                email,
+                wallet: wallet || 0,
+                birthday,
+                image,
+                status: "user",
+                created_at: new Date().toISOString()
+            });
+            console.log("✅ Firestore saved user:", uid);
+        } catch (fbErr) {
+            console.error("❌ Firestore save error:", fbErr);
+            return res.status(500).json({
+                message: "Firestore save failed",
+                error: fbErr.message
+            });
+        }
+
     });
 });
 
 
-app.post("/login", (req, res) => {
+
+
+app.post("/login", async (req, res) => {
     const { email, password } = req.body;
 
+    // ✅ ตรวจสอบ input
     if (!email || !password) {
-        return res.status(400).json({ message: "Email and password are required" });
+        return res.status(400).json({ message: "กรุณากรอก Email และ Password" });
     }
 
+    // ✅ hash password
     const hashedPassword = crypto.createHash("sha256").update(password).digest("hex");
 
-    const sql = "SELECT * FROM users WHERE email = ? AND password = ?";
-    db.query(sql, [email, hashedPassword], (err, results) => {
-        if (err) return res.status(500).json({ message: "Database error", error: err });
+    // ✅ หา user จาก MySQL
+    const sql = "SELECT * FROM users WHERE email = ?";
+    db.query(sql, [email], async (err, results) => {
+        if (err) {
+            console.error("❌ Database error:", err);
+            return res.status(500).json({ message: "Database error", error: err });
+        }
 
         if (results.length === 0) {
-            return res.status(401).json({ message: "Invalid email or password" });
+            return res.status(401).json({ message: "ไม่พบ Email นี้ในระบบ" });
         }
 
         const user = results[0];
-        res.status(200).json({
-            message: "Login successful",
-            user: {
-                uid: user.uid,
-                user_name: user.user_name,
-                email: user.email,
-                status: user.status,
-                wallet: user.wallet,
-                image: user.image,
-            },
+
+        // ✅ ตรวจสอบ password
+        if (user.password !== hashedPassword) {
+            return res.status(401).json({ message: "รหัสผ่านไม่ถูกต้อง" });
+        }
+
+        // ✅ ถ้า login สำเร็จ
+        const userData = {
+            uid: user.uid,
+            user_name: user.user_name,
+            email: user.email,
+            status: user.status,
+            wallet: user.wallet,
+            image: user.image,
+            birthday: user.birthday
+        };
+
+        // ✅ optional: sync Firestore (ถ้าต้องการให้ตรงกับ MySQL)
+        try {
+            await firestore.collection("users").doc(user.uid.toString()).set({
+                ...userData,
+                updated_at: new Date().toISOString()
+            }, { merge: true });
+            console.log("✅ Firestore synced for user:", user.uid);
+        } catch (fbErr) {
+            console.error("⚠️ Firestore sync error:", fbErr);
+            // ไม่ return error เพื่อไม่ให้ login fail
+        }
+
+        return res.status(200).json({
+            message: "เข้าสู่ระบบสำเร็จ",
+            user: userData
         });
     });
 });
 
 
 
-app.post("/createlotto", (req, res) => {
+
+app.post("/createlotto", async (req, res) => {
     const { quantity, price } = req.body;
 
     if (!quantity || !price) {
@@ -156,12 +242,13 @@ app.post("/createlotto", (req, res) => {
     const generateUniqueNumber = () => {
         return new Promise((resolve, reject) => {
             const number = Math.floor(100000 + Math.random() * 900000);
-
             const checkSql = `SELECT COUNT(*) as cnt FROM lotto WHERE number = ?`;
+
             db.query(checkSql, [number], (err, results) => {
                 if (err) return reject(err);
 
                 if (results[0].cnt > 0) {
+                    // 🔁 ถ้าซ้ำ สุ่มใหม่
                     resolve(generateUniqueNumber());
                 } else {
                     resolve(number);
@@ -170,41 +257,57 @@ app.post("/createlotto", (req, res) => {
         });
     };
 
-    const lottoPromises = [];
-    for (let i = 0; i < quantity; i++) {
-        const promise = new Promise(async (resolve, reject) => {
-            try {
-                const number = await generateUniqueNumber();
+    try {
+        const createdLottos = [];
 
-                const sql = `
-                    INSERT INTO lotto (number, price, status)
-                    VALUES (?, ?, 'still')
-                `;
+        for (let i = 0; i < quantity; i++) {
+            const number = await generateUniqueNumber();
+
+            const sql = `
+                INSERT INTO lotto (number, price, status)
+                VALUES (?, ?, 'still')
+            `;
+
+            const result = await new Promise((resolve, reject) => {
                 db.query(sql, [number, price], (err, result) => {
                     if (err) return reject(err);
                     resolve(result);
                 });
-            } catch (error) {
-                reject(error);
-            }
-        });
-        lottoPromises.push(promise);
-    }
-
-    Promise.all(lottoPromises)
-        .then(results => {
-            res.status(200).json({
-                message: `${quantity} lottery tickets created successfully`,
-                count: quantity,
-                price: price,
-                status: "still"
             });
-        })
-        .catch(err => {
-            console.error(err);
-            res.status(500).json({ message: "Failed to create lottery tickets" });
+
+            const lid = result.insertId;
+            const lottoData = {
+                lid,
+                number,
+                price,
+                status: "still",
+                created_at: new Date().toISOString()
+            };
+
+            createdLottos.push(lottoData);
+
+            // ✅ บันทึก Firestore ทีละใบ
+            try {
+                await firestore.collection("lotto").doc(lid.toString()).set(lottoData);
+            } catch (fbErr) {
+                console.error("⚠️ Firestore save error:", fbErr);
+                // ไม่ throw เพื่อไม่ให้ MySQL fail
+            }
+        }
+
+        res.status(200).json({
+            message: `${quantity} lottery tickets created successfully`,
+            count: quantity,
+            price: price,
+            lottos: createdLottos
         });
+
+    } catch (err) {
+        console.error("❌ Create lotto error:", err);
+        res.status(500).json({ message: "Failed to create lottery tickets" });
+    }
 });
+
 
 app.get("/lottos", (req, res) => {
     const sql = `SELECT * FROM lotto `;
@@ -247,38 +350,7 @@ app.post("/searchlotto", (req, res) => {
     });
 });
 
-// app.post("/addReward", (req, res) => {
-//     const { reward_type, reward_money, lid } = req.body;
 
-//     if (!reward_type || reward_money == null || !lid) {
-//         return res.status(400).json({ message: "กรอกข้อมูลไม่ครบ" });
-//     }
-
-//     const checkSql = "SELECT * FROM reward WHERE lid = ? AND reward_type = ?";
-//     db.query(checkSql, [lid, reward_type], (err, rows) => {
-//         if (err) {
-//             console.error(err);
-//             return res.status(500).json({ message: "ตรวจสอบรางวัลล้มเหลว" });
-//         }
-
-//         if (rows.length > 0) {
-//             return res.status(400).json({ message: "มีการบันทึกรางวัลนี้แล้ว" });
-//         }
-
-//         const insertSql = "INSERT INTO reward (reward_type, reward_money, lid) VALUES (?, ?, ?)";
-//         db.query(insertSql, [reward_type, reward_money, lid], (err, result) => {
-//             if (err) {
-//                 console.error(err);
-//                 return res.status(500).json({ message: "บันทึกรางวัลล้มเหลว" });
-//             }
-
-//             res.status(200).json({
-//                 message: "บันทึกรางวัลสำเร็จ",
-//                 rid: result.insertId
-//             });
-//         });
-//     });
-// });
 
 
 app.post("/updateLottoReward", (req, res) => {
@@ -327,42 +399,60 @@ app.post("/buyLotto", (req, res) => {
     db.beginTransaction((err) => {
         if (err) return res.status(500).json({ message: "เริ่ม transaction ล้มเหลว" });
 
+        // 1. ตรวจสอบเงินในกระเป๋า
         db.query("SELECT wallet FROM users WHERE uid = ?", [uid], (err, results) => {
-            if (err) {
-                return db.rollback(() => res.status(500).json({ message: "ดึงข้อมูลผู้ใช้ล้มเหลว" }));
-            }
-
-            if (results.length === 0) {
-                return db.rollback(() => res.status(404).json({ message: "ไม่พบผู้ใช้" }));
-            }
+            if (err) return db.rollback(() => res.status(500).json({ message: "ดึงข้อมูลผู้ใช้ล้มเหลว" }));
+            if (results.length === 0) return db.rollback(() => res.status(404).json({ message: "ไม่พบผู้ใช้" }));
 
             const wallet = parseFloat(results[0].wallet);
             if (wallet < price) {
                 return db.rollback(() => res.status(400).json({ message: "เงินไม่พอ" }));
             }
 
+            // 2. อัปเดตสถานะล็อตโต้
             const sqlLotto = "UPDATE lotto SET uid = ?, status = 'sell' WHERE lid = ? AND status = 'still'";
             db.query(sqlLotto, [uid, lid], (err, result) => {
                 if (err || result.affectedRows === 0) {
-                    return db.rollback(() => res.status(400).json({ message: "หวยถูกซื้อไปแล้ว" }));
+                    return db.rollback(() => res.status(400).json({ message: "หวยถูกซื้อไปแล้ว หรือไม่พบข้อมูล" }));
                 }
 
+                // 3. หักเงินใน wallet
                 const sqlWallet = "UPDATE users SET wallet = wallet - ? WHERE uid = ?";
-                db.query(sqlWallet, [price, uid], (err, result2) => {
-                    if (err) {
-                        return db.rollback(() => res.status(500).json({ message: "หักเงินล้มเหลว" }));
-                    }
+                db.query(sqlWallet, [price, uid], (err) => {
+                    if (err) return db.rollback(() => res.status(500).json({ message: "หักเงินล้มเหลว" }));
 
-                    db.commit((err) => {
-                        if (err) {
-                            return db.rollback(() => res.status(500).json({ message: "commit ล้มเหลว" }));
+                    // 4. Commit MySQL ก่อน
+                    db.commit(async (err) => {
+                        if (err) return db.rollback(() => res.status(500).json({ message: "commit ล้มเหลว" }));
+
+                        const newWallet = wallet - price;
+
+                        // 5. อัปเดต Firestore (ไม่ทำให้ transaction fail)
+                        try {
+                            await firestore.collection("users").doc(uid.toString()).set({
+                                wallet: newWallet,
+                                updated_at: new Date().toISOString()
+                            }, { merge: true });
+
+                            await firestore.collection("lotto").doc(lid.toString()).set({
+                                uid,
+                                lid,
+                                price,
+                                status: "sell",
+                                updated_at: new Date().toISOString()
+                            }, { merge: true });
+
+                            console.log("✅ Firestore synced:", { uid, lid });
+                        } catch (fbErr) {
+                            console.error("⚠️ Firestore sync error:", fbErr);
+                            // ไม่ rollback เพื่อไม่ให้ซื้อพัง
                         }
 
                         res.status(200).json({
-                            message: "ซื้อสำเร็จและหักเงินแล้ว",
+                            message: "ซื้อสำเร็จ (MySQL + Firestore)",
                             uid,
                             lid,
-                            newWallet: wallet - price
+                            newWallet
                         });
                     });
                 });
@@ -370,6 +460,8 @@ app.post("/buyLotto", (req, res) => {
         });
     });
 });
+
+
 
 app.get("/myLotto/:uid", (req, res) => {
     const { uid } = req.params;
@@ -494,6 +586,3 @@ app.listen(port, () => {
     console.log(`🚀 Server running on http://${ip}:${port}`);
 });
 
-app.listen(port, () => {
-    console.log(`🚀 Server running on port ${port}`);
-});
