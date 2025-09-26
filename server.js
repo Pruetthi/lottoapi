@@ -480,7 +480,7 @@ app.get("/myLotto/:uid", (req, res) => {
 });
 
 
-app.post("/claim/:lid", (req, res) => {
+app.post("/claim/:lid", async (req, res) => {
     const { lid } = req.params;
 
     const sql = `
@@ -489,7 +489,8 @@ app.post("/claim/:lid", (req, res) => {
         JOIN reward r ON l.rid = r.rid
         WHERE l.lid = ?
     `;
-    db.query(sql, [lid], (err, results) => {
+
+    db.query(sql, [lid], async (err, results) => {
         if (err) return res.status(500).json({ message: "ดึงข้อมูลล้มเหลว" });
         if (results.length === 0) return res.status(404).json({ message: "ไม่พบหวยนี้" });
 
@@ -499,26 +500,49 @@ app.post("/claim/:lid", (req, res) => {
             return res.status(400).json({ message: "หวยนี้ขึ้นเงินแล้ว" });
         }
 
-        const updateWalletSql = `
-            UPDATE users 
-            SET wallet = wallet + ? 
-            WHERE uid = ?
-        `;
-        db.query(updateWalletSql, [lotto.reward_money, lotto.uid], (err2) => {
-            if (err2) return res.status(500).json({ message: "อัปเดตเงินล้มเหลว" });
-
-            // อัปเดต status ของหวยเป็น claim
-            const updateStatusSql = "UPDATE lotto SET status = 'claim' WHERE lid = ?";
-            db.query(updateStatusSql, [lid], (err3) => {
-                if (err3) return res.status(500).json({ message: "อัปเดตสถานะหวยล้มเหลว" });
-
-                res.status(200).json({
-                    message: "รับรางวัลสำเร็จ",
-                    reward_type: lotto.reward_type,
-                    amount: lotto.reward_money
+        try {
+            // 1. อัปเดต wallet ใน MySQL
+            await new Promise((resolve, reject) => {
+                const sqlWallet = `UPDATE users SET wallet = wallet + ? WHERE uid = ?`;
+                db.query(sqlWallet, [lotto.reward_money, lotto.uid], (err2) => {
+                    if (err2) reject(err2);
+                    else resolve();
                 });
             });
-        });
+
+            // 2. อัปเดต status ของ lotto ใน MySQL
+            await new Promise((resolve, reject) => {
+                const sqlStatus = "UPDATE lotto SET status = 'claim' WHERE lid = ?";
+                db.query(sqlStatus, [lid], (err3) => {
+                    if (err3) reject(err3);
+                    else resolve();
+                });
+            });
+
+            // 3. อัปเดต Firestore
+            try {
+                await firestore.collection("users").doc(lotto.uid.toString()).update({
+                    wallet: admin.firestore.FieldValue.increment(lotto.reward_money),
+                    updated_at: new Date().toISOString()
+                });
+                await firestore.collection("lotto").doc(lid.toString()).update({
+                    status: "claim",
+                    updated_at: new Date().toISOString()
+                });
+            } catch (fbErr) {
+                console.error("⚠️ Firestore sync error:", fbErr);
+                // ไม่ rollback MySQL เพื่อไม่ให้ผู้ใช้เสียสิทธิ์
+            }
+
+            res.status(200).json({
+                message: "รับรางวัลสำเร็จ (MySQL + Firestore)",
+                reward_type: lotto.reward_type,
+                amount: lotto.reward_money
+            });
+        } catch (err) {
+            console.error(err);
+            res.status(500).json({ message: "ขึ้นเงินล้มเหลว", error: err.message });
+        }
     });
 });
 
