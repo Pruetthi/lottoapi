@@ -544,6 +544,7 @@ app.get("/admin/rewardedLottos", (req, res) => {
 
 app.post("/resetSystem", async (req, res) => {
     try {
+        // 1. ลบ lotto ทั้งหมดใน MySQL
         await new Promise((resolve, reject) => {
             db.query("DELETE FROM lotto", (err) => {
                 if (err) reject(err);
@@ -551,6 +552,7 @@ app.post("/resetSystem", async (req, res) => {
             });
         });
 
+        // 2. รีเซ็ต AUTO_INCREMENT ของ lotto
         await new Promise((resolve, reject) => {
             db.query("ALTER TABLE lotto AUTO_INCREMENT = 1", (err) => {
                 if (err) reject(err);
@@ -558,6 +560,7 @@ app.post("/resetSystem", async (req, res) => {
             });
         });
 
+        // 3. ลบ users ที่ไม่ใช่ admin
         await new Promise((resolve, reject) => {
             db.query("DELETE FROM users WHERE status != 'admin'", (err) => {
                 if (err) reject(err);
@@ -565,12 +568,23 @@ app.post("/resetSystem", async (req, res) => {
             });
         });
 
-        res.status(200).json({ message: "รีเซ็ตระบบสำเร็จ" });
+        // 4. ลบ Firestore ทั้ง lotto และ users (ที่ไม่ใช่ admin)
+        const deleteLottoFS = firestore.collection("lotto").listDocuments()
+            .then(docs => Promise.all(docs.map(doc => doc.delete())));
+
+        const deleteUsersFS = firestore.collection("users").where("status", "!=", "admin").get()
+            .then(snapshot => Promise.all(snapshot.docs.map(doc => doc.ref.delete())));
+
+        await Promise.all([deleteLottoFS, deleteUsersFS]);
+
+        res.status(200).json({ message: "รีเซ็ตระบบสำเร็จ (MySQL + Firestore)" });
+
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: "รีเซ็ตระบบล้มเหลว", error: err });
+        res.status(500).json({ message: "รีเซ็ตระบบล้มเหลว", error: err.message });
     }
 });
+
 
 let ip = "0.0.0.0";
 const ips = os.networkInterfaces();
